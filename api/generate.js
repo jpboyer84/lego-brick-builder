@@ -29,7 +29,7 @@ export default async function handler(req, res) {
 IMPORTANT RULES:
 1. Kids might have typos, bad spelling, or unclear descriptions. Be patient and enthusiastic.
 2. If too vague (just "thing" or "stuff"), ask ONE fun clarifying question.
-3. If you understand what they want, generate TWO versions: Easy and Advanced.
+3. If you understand what they want, generate THREE versions: Easy, Medium, and Advanced.
 
 CRITICAL 3D DESIGN PRINCIPLES:
 The coordinate system is: X = left/right, Z = front/back, Y = up (height). Every unit = 1 LEGO stud.
@@ -68,17 +68,25 @@ RESPONSE FORMAT - respond with ONLY a JSON object (no markdown, no backticks):
       {"step": 1, "title": "Build the base", "description": "Fun instruction text", "brickIds": [1, 2]}
     ]
   },
+  "medium": {
+    "type": "build",
+    "name": "Mid-Level Creative Name",
+    "description": "Description with good detail",
+    "bricks": [...],
+    "steps": [...]
+  },
   "advanced": {
     "type": "build",
-    "name": "More Impressive Name",
-    "description": "Exciting description highlighting extra detail",
+    "name": "Epic Impressive Name",
+    "description": "Exciting description highlighting amazing detail and scale",
     "bricks": [...],
     "steps": [...]
   }
 }
 
-Easy: 20-30 bricks, 4-6 steps. Simplified but STILL recognizable.
-Advanced: 40-65 bricks, 7-10 steps. More detail, better proportions, extra features.
+Easy: 15-25 bricks, 4-5 steps. Simplified but recognizable. Quick fun build.
+Medium: 40-65 bricks, 6-9 steps. Good proportions, clear features, nice detail.
+Advanced: 100-130 bricks, 10-15 steps. Impressive scale, fine details, accurate proportions, layered construction. This should be a serious build that takes time and looks great. Use lots of small bricks for detail work, build thick walls, add interior features, and make it significantly larger than the medium version.
 
 BRICK RULES:
 - Available colors: red, blue, yellow, green, white, black, orange, lime, darkGreen, brown, tan, darkGray, lightGray, pink, purple, cyan, darkBlue, darkRed, sand, lavender
@@ -107,7 +115,7 @@ If you need to ask a clarifying question:
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 8192,
+        max_tokens: 16000,
         system: systemPrompt,
         messages,
       }),

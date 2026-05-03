@@ -286,6 +286,7 @@ export default function LegoBuilder() {
 
   // Choose screen
   const [easyBuild, setEasyBuild] = useState(null);
+  const [mediumBuild, setMediumBuild] = useState(null);
   const [advancedBuild, setAdvancedBuild] = useState(null);
   const [selectedDifficulty, setSelectedDifficulty] = useState(null);
   const [tweakInput, setTweakInput] = useState("");
@@ -354,6 +355,7 @@ export default function LegoBuilder() {
       } else if (parsed.type === "dual_build") {
         setChatHistory([...newHistory, { role: "assistant", content: JSON.stringify(parsed) }]);
         setEasyBuild(parsed.easy);
+        setMediumBuild(parsed.medium || null);
         setAdvancedBuild(parsed.advanced);
         setSelectedDifficulty(null);
         setScreen("choose");
@@ -361,6 +363,7 @@ export default function LegoBuilder() {
         // Fallback single build
         setChatHistory([...newHistory, { role: "assistant", content: JSON.stringify(parsed) }]);
         setEasyBuild(parsed);
+        setMediumBuild(null);
         setAdvancedBuild(null);
         setBuildData(parsed);
         setCurrentStep(-1);
@@ -381,13 +384,13 @@ export default function LegoBuilder() {
     setError(null);
     setTweakInput("");
 
-    const currentBuild = selectedDifficulty === "easy" ? easyBuild : advancedBuild;
-    const difficulty = selectedDifficulty === "easy" ? "easy (15-30 bricks, 4-6 steps)" : "advanced (35-60 bricks, 6-10 steps)";
+    const currentBuild = selectedDifficulty === "easy" ? easyBuild : selectedDifficulty === "medium" ? mediumBuild : advancedBuild;
+    const difficultyDesc = selectedDifficulty === "easy" ? "easy (15-25 bricks, 4-5 steps)" : selectedDifficulty === "medium" ? "medium (40-65 bricks, 6-9 steps)" : "advanced (100-130 bricks, 10-15 steps)";
 
     try {
       const tweakMessages = [{
         role: "user",
-        content: `I have this ${difficulty} LEGO build called "${currentBuild.name}": ${JSON.stringify(currentBuild)}\n\nThe user wants this change: "${val}"\n\nPlease generate an updated version with the requested change. Keep it at the same difficulty level (${difficulty}). Respond with ONLY a JSON object with type "build", name, description, bricks array, and steps array. No markdown.`
+        content: `I have this ${difficultyDesc} LEGO build called "${currentBuild.name}": ${JSON.stringify(currentBuild)}\n\nThe user wants this change: "${val}"\n\nPlease generate an updated version with the requested change. Keep it at the same difficulty level (${difficultyDesc}). Respond with ONLY a JSON object with type "build", name, description, bricks array, and steps array. No markdown.`
       }];
 
       const response = await callAI(tweakMessages);
@@ -396,6 +399,7 @@ export default function LegoBuilder() {
       if (parsed.bricks) {
         if (!parsed.type) parsed.type = "build";
         if (selectedDifficulty === "easy") setEasyBuild(parsed);
+        else if (selectedDifficulty === "medium") setMediumBuild(parsed);
         else setAdvancedBuild(parsed);
       }
     } catch (err) {
@@ -403,7 +407,7 @@ export default function LegoBuilder() {
       setError("Couldn't make that change — try describing it differently!");
     }
     setIsTweaking(false);
-  }, [tweakInput, isTweaking, selectedDifficulty, easyBuild, advancedBuild, callAI]);
+  }, [tweakInput, isTweaking, selectedDifficulty, easyBuild, mediumBuild, advancedBuild, callAI]);
 
   const pieces = useMemo(() => {
     if (!buildData?.bricks) return [];
@@ -420,7 +424,7 @@ export default function LegoBuilder() {
   const currentStepData = buildData?.steps?.[currentStep];
 
   const resetAll = () => {
-    setScreen("home"); setBuildData(null); setEasyBuild(null); setAdvancedBuild(null);
+    setScreen("home"); setBuildData(null); setEasyBuild(null); setMediumBuild(null); setAdvancedBuild(null);
     setSelectedDifficulty(null); setChatHistory([]); setShowPieces(false);
     setError(null); setTweakInput(""); setCurrentStep(-1);
   };
@@ -532,6 +536,20 @@ export default function LegoBuilder() {
               <div style={S.chooseStepCount}>{easyBuild?.steps?.length || 0} steps</div>
             </div>
 
+            {/* Medium */}
+            {mediumBuild && (
+              <div style={{ ...S.chooseCard, borderColor: selectedDifficulty === "medium" ? LEGO_COLORS.blue : "rgba(255,255,255,0.1)", boxShadow: selectedDifficulty === "medium" ? `0 0 20px ${LEGO_COLORS.blue}40` : "none" }} onClick={() => setSelectedDifficulty("medium")}>
+                <div style={S.chooseBadgeRow}>
+                  <span style={{ ...S.chooseBadge, background: "rgba(0,85,191,0.3)", color: LEGO_COLORS.blue }}>⚡ Medium</span>
+                  <span style={S.chooseBrickCount}>{mediumBuild?.bricks?.length || 0} bricks</span>
+                </div>
+                <h3 style={S.chooseCardTitle}>{mediumBuild?.name || "Medium Build"}</h3>
+                <p style={S.chooseCardDesc}>{mediumBuild?.description}</p>
+                <div style={S.chooseCanvasWrap}>{mediumBuild?.bricks && <LegoCanvas bricks={mediumBuild.bricks} rotateAuto={true} />}</div>
+                <div style={S.chooseStepCount}>{mediumBuild?.steps?.length || 0} steps</div>
+              </div>
+            )}
+
             {/* Advanced */}
             {advancedBuild && (
               <div style={{ ...S.chooseCard, borderColor: selectedDifficulty === "advanced" ? LEGO_COLORS.orange : "rgba(255,255,255,0.1)", boxShadow: selectedDifficulty === "advanced" ? `0 0 20px ${LEGO_COLORS.orange}40` : "none" }} onClick={() => setSelectedDifficulty("advanced")}>
@@ -561,7 +579,8 @@ export default function LegoBuilder() {
               </div>
             )}
             <button style={{ ...S.buildItBtn, opacity: selectedDifficulty ? 1 : 0.4 }} disabled={!selectedDifficulty} onClick={() => {
-              setBuildData(selectedDifficulty === "easy" ? easyBuild : advancedBuild);
+              const chosen = selectedDifficulty === "easy" ? easyBuild : selectedDifficulty === "medium" ? mediumBuild : advancedBuild;
+              setBuildData(chosen);
               setCurrentStep(-1);
               setScreen("build");
             }}>
