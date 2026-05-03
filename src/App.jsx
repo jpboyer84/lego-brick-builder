@@ -427,7 +427,7 @@ export default function LegoBuilder() {
       } else if (parsed.type === "build") {
         setChatHistory([...newHistory, { role: "assistant", content: JSON.stringify(parsed) }]);
         setBuildData(parsed);
-        setCurrentStep(0);
+        setCurrentStep(-1);
         setScreen("build");
       }
     } catch (err) {
@@ -618,7 +618,7 @@ export default function LegoBuilder() {
           <div style={styles.canvasArea}>
             <LegoCanvas
               bricks={buildData?.bricks || []}
-              highlightStep={currentStep + 1}
+              highlightStep={currentStep === -1 ? undefined : currentStep + 1}
               rotateAuto={true}
             />
             <div style={styles.canvasHint}>🖱️ Drag to rotate</div>
@@ -640,15 +640,28 @@ export default function LegoBuilder() {
         {/* Step Instructions */}
         <div style={styles.stepsBar}>
           <div style={styles.stepProgress}>
+            <button
+              onClick={() => setCurrentStep(-1)}
+              style={{
+                ...styles.stepDot,
+                background: currentStep === -1 ? LEGO_COLORS.yellow : "rgba(255,255,255,0.15)",
+                transform: currentStep === -1 ? "scale(1.3)" : "scale(1)",
+                color: currentStep === -1 ? "#1B2A34" : "rgba(255,255,255,0.5)",
+                fontSize: "11px",
+                width: "32px",
+              }}
+            >
+              ★
+            </button>
             {buildData?.steps?.map((_, i) => (
               <button
                 key={i}
                 onClick={() => setCurrentStep(i)}
                 style={{
                   ...styles.stepDot,
-                  background: i === currentStep ? LEGO_COLORS.yellow : i < currentStep ? LEGO_COLORS.green : "rgba(255,255,255,0.15)",
+                  background: i === currentStep ? LEGO_COLORS.yellow : (currentStep > -1 && i < currentStep) ? LEGO_COLORS.green : "rgba(255,255,255,0.15)",
                   transform: i === currentStep ? "scale(1.3)" : "scale(1)",
-                  color: i <= currentStep ? "#1B2A34" : "rgba(255,255,255,0.5)",
+                  color: (i === currentStep || (currentStep > -1 && i < currentStep)) ? "#1B2A34" : "rgba(255,255,255,0.5)",
                 }}
               >
                 {i + 1}
@@ -656,44 +669,75 @@ export default function LegoBuilder() {
             ))}
           </div>
 
-          <div style={styles.stepCard}>
-            <div style={styles.stepHeader}>
-              <span style={styles.stepBadge}>Step {currentStep + 1} of {totalSteps}</span>
-              <h3 style={styles.stepTitle}>{currentStepData?.title}</h3>
+          {currentStep === -1 ? (
+            <div style={styles.stepCard}>
+              <div style={styles.stepHeader}>
+                <span style={{...styles.stepBadge, background: "rgba(168,255,120,0.2)", color: "#a8ff78"}}>★ Finished Build</span>
+                <h3 style={styles.stepTitle}>This is what you're building!</h3>
+              </div>
+              <p style={styles.stepDesc}>
+                Take a good look at the finished model — spin it around to see every angle! When you're ready, hit "Start Building" to begin the step-by-step instructions.
+              </p>
+              <div style={styles.stepBricks}>
+                <span style={{
+                  fontSize: "13px",
+                  color: "rgba(255,255,255,0.5)",
+                  fontWeight: 600,
+                }}>
+                  {buildData?.bricks?.length || 0} bricks • {totalSteps} steps
+                </span>
+              </div>
             </div>
-            <p style={styles.stepDesc}>{currentStepData?.description}</p>
-            <div style={styles.stepBricks}>
-              {currentStepData?.brickIds?.map(id => {
-                const brick = buildData.bricks.find(b => b.id === id);
-                if (!brick) return null;
-                return (
-                  <span key={id} style={{
-                    ...styles.stepBrickChip,
-                    borderColor: LEGO_COLORS[brick.color] || "#fff",
-                    color: LEGO_COLORS[brick.color] || "#fff",
-                  }}>
-                    {brick.width}×{brick.depth} {brick.color}
-                  </span>
-                );
-              })}
+          ) : (
+            <div style={styles.stepCard}>
+              <div style={styles.stepHeader}>
+                <span style={styles.stepBadge}>Step {currentStep + 1} of {totalSteps}</span>
+                <h3 style={styles.stepTitle}>{currentStepData?.title}</h3>
+              </div>
+              <p style={styles.stepDesc}>{currentStepData?.description}</p>
+              <div style={styles.stepBricks}>
+                {currentStepData?.brickIds?.map(id => {
+                  const brick = buildData.bricks.find(b => b.id === id);
+                  if (!brick) return null;
+                  return (
+                    <span key={id} style={{
+                      ...styles.stepBrickChip,
+                      borderColor: LEGO_COLORS[brick.color] || "#fff",
+                      color: LEGO_COLORS[brick.color] || "#fff",
+                    }}>
+                      {brick.width}×{brick.depth} {brick.color}
+                    </span>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           <div style={styles.stepNav}>
-            <button
-              style={{ ...styles.navBtn, opacity: currentStep === 0 ? 0.3 : 1 }}
-              onClick={() => setCurrentStep(Math.max(0, currentStep - 1))}
-              disabled={currentStep === 0}
-            >
-              ← Previous
-            </button>
-            <button
-              style={{ ...styles.navBtn, ...styles.navBtnPrimary, opacity: currentStep >= totalSteps - 1 ? 0.3 : 1 }}
-              onClick={() => setCurrentStep(Math.min(totalSteps - 1, currentStep + 1))}
-              disabled={currentStep >= totalSteps - 1}
-            >
-              Next Step →
-            </button>
+            {currentStep === -1 ? (
+              <button
+                style={{ ...styles.navBtn, ...styles.navBtnPrimary, padding: "12px 32px", fontSize: "16px" }}
+                onClick={() => setCurrentStep(0)}
+              >
+                🧱 Start Building →
+              </button>
+            ) : (
+              <>
+                <button
+                  style={{ ...styles.navBtn, opacity: currentStep === 0 ? 0.5 : 1 }}
+                  onClick={() => setCurrentStep(currentStep === 0 ? -1 : currentStep - 1)}
+                >
+                  {currentStep === 0 ? "← Preview" : "← Previous"}
+                </button>
+                <button
+                  style={{ ...styles.navBtn, ...styles.navBtnPrimary, opacity: currentStep >= totalSteps - 1 ? 0.3 : 1 }}
+                  onClick={() => setCurrentStep(Math.min(totalSteps - 1, currentStep + 1))}
+                  disabled={currentStep >= totalSteps - 1}
+                >
+                  Next Step →
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
