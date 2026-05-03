@@ -220,7 +220,7 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
       renderer.render(scene, camera);
     };
     animate();
-  }, [bricks, highlightStep, rotateAuto]);
+  }, [bricks, highlightStep, rotateAuto, ready]);
 
   return <div ref={mountRef} style={{ width: "100%", height: "100%", cursor: "grab", borderRadius: "16px", overflow: "hidden" }} />;
 }
