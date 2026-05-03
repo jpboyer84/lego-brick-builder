@@ -1,32 +1,369 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, forwardRef, useImperativeHandle } from "react";
 import * as THREE from "three";
 
 // ─── LEGO COLOR PALETTE ───
 const LEGO_COLORS = {
-  red: "#C4281B",
-  blue: "#0055BF",
-  yellow: "#F5CD2F",
-  green: "#237841",
-  white: "#F4F4F4",
-  black: "#1B2A34",
-  orange: "#FE8A18",
-  lime: "#A6CA55",
-  darkGreen: "#184632",
-  brown: "#583927",
-  tan: "#E4CD9E",
-  darkGray: "#6C6E68",
-  lightGray: "#A0A5A9",
-  pink: "#FC97AC",
-  purple: "#6B327B",
-  cyan: "#068BC9",
-  darkBlue: "#143044",
-  darkRed: "#720E0F",
-  sand: "#D9BB7B",
-  lavender: "#C9CAE2",
+  red: "#C4281B", blue: "#0055BF", yellow: "#F5CD2F", green: "#237841",
+  white: "#F4F4F4", black: "#1B2A34", orange: "#FE8A18", lime: "#A6CA55",
+  darkGreen: "#184632", brown: "#583927", tan: "#E4CD9E", darkGray: "#6C6E68",
+  lightGray: "#A0A5A9", pink: "#FC97AC", purple: "#6B327B", cyan: "#068BC9",
+  darkBlue: "#143044", darkRed: "#720E0F", sand: "#D9BB7B", lavender: "#C9CAE2",
 };
 
-// ─── 3D LEGO BRICK RENDERER ───
-function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
+// World scale: 1 stud = 0.8 units, 1 brick height = 0.32 units
+const STUD = 0.8;
+const BRICK_H = 0.32;
+
+// ═══════════════════════════════════════════
+// PIECE GEOMETRY HELPERS
+// ═══════════════════════════════════════════
+
+function createMaterial(color, isHighlighted, isGhosted) {
+  const mat = new THREE.MeshPhysicalMaterial({
+    color, roughness: 0.35, metalness: 0.0, clearcoat: 0.4, clearcoatRoughness: 0.25,
+    transparent: isGhosted, opacity: isGhosted ? 0.3 : 1,
+    side: THREE.DoubleSide,
+  });
+  if (isHighlighted) mat.emissive = color.clone().multiplyScalar(0.2);
+  return mat;
+}
+
+// Standard rectangular brick mesh (with optional shorter height for tiles/plates)
+function createBoxMesh(w, d, h, material) {
+  const geo = new THREE.BoxGeometry(w - 0.04, h - 0.02, d - 0.04);
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.position.set(w / 2, h / 2, d / 2);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// Slope: triangular prism with high side at one direction
+// direction = which way the slope rises ("east", "west", "north", "south")
+function createSlopeMesh(w, d, h, direction, material) {
+  let verts;
+  switch (direction) {
+    case "east": // High at x=w
+      verts = [
+        0, 0, 0,    // 0: SW base
+        w, 0, 0,    // 1: SE base
+        w, 0, d,    // 2: NE base
+        0, 0, d,    // 3: NW base
+        w, h, 0,    // 4: SE top
+        w, h, d,    // 5: NE top
+      ];
+      break;
+    case "west": // High at x=0
+      verts = [
+        0, 0, 0,    // 0: SW base
+        w, 0, 0,    // 1: SE base
+        w, 0, d,    // 2: NE base
+        0, 0, d,    // 3: NW base
+        0, h, 0,    // 4: SW top
+        0, h, d,    // 5: NW top
+      ];
+      break;
+    case "north": // High at z=d
+      verts = [
+        0, 0, 0,    // 0: SW base
+        w, 0, 0,    // 1: SE base
+        w, 0, d,    // 2: NE base
+        0, 0, d,    // 3: NW base
+        0, h, d,    // 4: NW top
+        w, h, d,    // 5: NE top
+      ];
+      break;
+    case "south": // High at z=0
+    default:
+      verts = [
+        0, 0, 0,    // 0: SW base
+        w, 0, 0,    // 1: SE base
+        w, 0, d,    // 2: NE base
+        0, 0, d,    // 3: NW base
+        0, h, 0,    // 4: SW top
+        w, h, 0,    // 5: SE top
+      ];
+      break;
+  }
+
+  // Build indices based on direction (so faces have correct winding)
+  let indices;
+  switch (direction) {
+    case "east":
+      indices = [
+        // Bottom (-Y normal)
+        0, 2, 1,  0, 3, 2,
+        // East (high face, +X normal)
+        1, 2, 5,  1, 5, 4,
+        // Slope (top, normal up-and-west)
+        0, 5, 3,  0, 4, 5,
+        // North side (z=0 wall, -Z normal): triangle (0,0,0)→(w,0,0)→(w,h,0)
+        0, 1, 4,
+        // South side (z=d wall, +Z normal): triangle (0,0,d)→(w,h,d)→(w,0,d)
+        3, 5, 2,
+      ];
+      break;
+    case "west":
+      indices = [
+        0, 2, 1,  0, 3, 2,            // Bottom
+        0, 4, 5,  0, 5, 3,            // West face (high, -X)
+        1, 5, 4,  1, 2, 5,            // Slope (top, normal up-and-east)
+        0, 4, 1,                       // North wall
+        3, 2, 5,                       // South wall (wait need to check)
+      ];
+      // Actually for "west", south wall is triangle (3,5,2): (0,0,d), (0,h,d), (w,0,d)
+      // We need it: from +Z view CCW
+      indices = [
+        0, 2, 1,  0, 3, 2,            // Bottom
+        0, 4, 5,  0, 5, 3,            // West face (high, -X normal)
+        4, 1, 5,  1, 2, 5,            // Slope
+        0, 1, 4,                       // North wall (-Z normal)
+        3, 5, 2,                       // South wall (+Z normal)
+      ];
+      break;
+    case "north":
+      indices = [
+        0, 2, 1,  0, 3, 2,            // Bottom
+        2, 5, 4,  2, 4, 3,            // North face (+Z, high)
+        0, 1, 5,  0, 5, 4,            // Slope (south to north rising)
+        0, 4, 3,                       // West wall (-X)
+        1, 2, 5,                       // East wall (+X)
+      ];
+      break;
+    case "south":
+    default:
+      indices = [
+        0, 2, 1,  0, 3, 2,            // Bottom
+        0, 5, 1,  0, 4, 5,            // South face (-Z, high)  -- wait, south face is at z=0
+        // Slope: from south(high) to north(low). Top vertices at z=0 (4,5), bottom at z=d (3,2)
+        // Slope quad: 4,5,2,3 → triangles 4,5,2 and 4,2,3
+        4, 2, 5,  4, 3, 2,            // Slope
+        0, 4, 3,                       // West wall (vertices SW base, SW top, NW base)
+        1, 2, 5,                       // East wall
+      ];
+      break;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// Inverted slope: triangular prism with high side at opposite direction (overhang piece)
+function createSlopeInvMesh(w, d, h, direction, material) {
+  // Inverted slope = the slope is on the bottom, full block on top
+  // For "east": low at top-east, high underneath toward west
+  // Easier: just create a slope and flip it
+  const slopeMesh = createSlopeMesh(w, d, h, direction, material);
+  slopeMesh.rotation.x = Math.PI;
+  slopeMesh.position.set(0, h, 0);
+  // After rotation around X, x stays, y → -y, z → -z. So we need to translate to put it back in [0,w]×[0,h]×[0,d]
+  // After rotateX(180°): (x, y, z) → (x, -y, -z). So y range becomes -h..0 and z becomes -d..0.
+  // Translate +h on y and +d on z: final range x: 0..w, y: 0..h, z: 0..d ✓
+  slopeMesh.position.set(0, h, d);
+  return slopeMesh;
+}
+
+// Wedge plate: triangular footprint (right triangle) extruded vertically
+// direction = which corner has the right angle ("sw", "se", "ne", "nw")
+function createWedgeMesh(w, d, h, direction, material) {
+  // Triangle corners in XZ plane based on direction
+  let corners;
+  switch (direction) {
+    case "sw": corners = [[0, 0], [w, 0], [0, d]]; break;
+    case "se": corners = [[w, 0], [w, d], [0, 0]]; break;
+    case "ne": corners = [[w, d], [0, d], [w, 0]]; break;
+    case "nw": corners = [[0, d], [0, 0], [w, d]]; break;
+    default: corners = [[0, 0], [w, 0], [0, d]];
+  }
+
+  const verts = [];
+  for (const [x, z] of corners) verts.push(x, 0, z); // base (0, 1, 2)
+  for (const [x, z] of corners) verts.push(x, h, z); // top (3, 4, 5)
+
+  // For each direction, faces and winding need adjustment
+  // Bottom face: triangle of corners 0-1-2, looking from below
+  // Top face: triangle of corners 3-4-5, looking from above
+  // 3 side faces (rectangles): each between two adjacent corners
+  
+  const indices = [
+    // Bottom (looking from below, want -Y normal)
+    0, 2, 1,
+    // Top (looking from above, want +Y normal)
+    3, 4, 5,
+    // Side: corner 0→1 (and 3→4 on top)
+    0, 1, 4,  0, 4, 3,
+    // Side: corner 1→2 (and 4→5 on top)
+    1, 2, 5,  1, 5, 4,
+    // Side: corner 2→0 (and 5→3 on top)
+    2, 0, 3,  2, 3, 5,
+  ];
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// Cone: tapered cylindrical piece. Width = diameter at base in stud units.
+function createConeMesh(w, d, h, material) {
+  const radius = (Math.min(w, d) / 2) * 0.95;
+  const geo = new THREE.ConeGeometry(radius, h, 24);
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.position.set(w / 2, h / 2, d / 2);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// Cylinder: round vertical pillar
+function createCylinderMesh(w, d, h, material) {
+  const radius = (Math.min(w, d) / 2) * 0.95;
+  const geo = new THREE.CylinderGeometry(radius, radius, h, 24);
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.position.set(w / 2, h / 2, d / 2);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// Arch: a brick with a curved/straight cutout underneath
+function createArchMesh(w, d, h, material) {
+  // Use a shape with an arch cutout
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0);
+  shape.lineTo(w, 0);
+  shape.lineTo(w, h);
+  shape.lineTo(0, h);
+  shape.lineTo(0, 0);
+  
+  // Hole: arch shape
+  const hole = new THREE.Path();
+  const archHeight = h * 0.6;
+  const archInset = w * 0.15;
+  hole.moveTo(archInset, 0);
+  hole.lineTo(w - archInset, 0);
+  hole.lineTo(w - archInset, archHeight * 0.5);
+  // Curve to top
+  hole.bezierCurveTo(w - archInset, archHeight, archInset, archHeight, archInset, archHeight * 0.5);
+  hole.lineTo(archInset, 0);
+  shape.holes.push(hole);
+  
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: d, bevelEnabled: false });
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// Add studs to a group at brick's stud positions
+function addStuds(group, w, d, h, material, type, direction) {
+  const studGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.12, 16);
+  const studsW = Math.round(w / STUD);
+  const studsD = Math.round(d / STUD);
+  
+  for (let sx = 0; sx < studsW; sx++) {
+    for (let sz = 0; sz < studsD; sz++) {
+      // Skip studs outside the wedge triangle
+      if (type === "wedge") {
+        const cx = sx + 0.5, cz = sz + 0.5;
+        const wU = w / STUD, dU = d / STUD;
+        let inside = false;
+        // Triangle inclusion test based on direction
+        switch (direction) {
+          case "sw": inside = (cx / wU + cz / dU) < 1; break;
+          case "se": inside = ((wU - cx) / wU + cz / dU) < 1; break;
+          case "ne": inside = ((wU - cx) / wU + (dU - cz) / dU) < 1; break;
+          case "nw": inside = (cx / wU + (dU - cz) / dU) < 1; break;
+        }
+        if (!inside) continue;
+      }
+      
+      const stud = new THREE.Mesh(studGeo, material);
+      stud.position.set(0.4 + sx * STUD, h + 0.06, 0.4 + sz * STUD);
+      stud.castShadow = true;
+      group.add(stud);
+    }
+  }
+}
+
+// Main piece dispatcher: returns a Group positioned at origin, ready to translate
+function createPieceGroup(brick, isHighlighted, isGhosted) {
+  const color = new THREE.Color(LEGO_COLORS[brick.color] || brick.color || "#C4281B");
+  const material = createMaterial(color, isHighlighted, isGhosted);
+  const type = brick.type || "brick";
+  const w = (brick.width || 1) * STUD;
+  const d = (brick.depth || 1) * STUD;
+  const h = (brick.height || 1) * BRICK_H;
+  const direction = brick.direction || "east";
+
+  const group = new THREE.Group();
+  let mesh;
+  let hasStuds = false;
+
+  switch (type) {
+    case "brick":
+      mesh = createBoxMesh(w, d, h, material);
+      hasStuds = true;
+      break;
+    case "tile":
+      mesh = createBoxMesh(w, d, h, material);
+      // No studs
+      break;
+    case "plate":
+      // Plate = same footprint, full height (we don't subdivide y for simplicity)
+      mesh = createBoxMesh(w, d, h, material);
+      hasStuds = true;
+      break;
+    case "slope":
+      mesh = createSlopeMesh(w, d, h, direction, material);
+      break;
+    case "slope_inv":
+      mesh = createSlopeInvMesh(w, d, h, direction, material);
+      break;
+    case "wedge":
+      mesh = createWedgeMesh(w, d, h, direction, material);
+      hasStuds = true;
+      break;
+    case "cone":
+      mesh = createConeMesh(w, d, h, material);
+      break;
+    case "cylinder":
+      mesh = createCylinderMesh(w, d, h, material);
+      break;
+    case "round_brick":
+      mesh = createCylinderMesh(w, d, h, material);
+      hasStuds = true;
+      break;
+    case "arch":
+      mesh = createArchMesh(w, d, h, material);
+      break;
+    default:
+      mesh = createBoxMesh(w, d, h, material);
+      hasStuds = true;
+  }
+
+  group.add(mesh);
+  if (hasStuds) addStuds(group, w, d, h, material, type, direction);
+  return group;
+}
+
+// ═══════════════════════════════════════════
+// 3D LEGO RENDERER
+// ═══════════════════════════════════════════
+
+const LegoCanvas = forwardRef(function LegoCanvas({ bricks, highlightStep, rotateAuto }, ref) {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const rendererRef = useRef(null);
@@ -36,30 +373,37 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
   const rotRef = useRef({ x: -0.5, y: 0.5 });
   const [ready, setReady] = useState(false);
 
-  // Wait for container to have real dimensions
+  // Expose capture method via ref
+  useImperativeHandle(ref, () => ({
+    capture: () => {
+      if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return null;
+      rendererRef.current.render(sceneRef.current, cameraRef.current);
+      try {
+        return rendererRef.current.domElement.toDataURL("image/png");
+      } catch (e) {
+        console.error("Capture failed:", e);
+        return null;
+      }
+    }
+  }), []);
+
+  // Wait for container size
   useEffect(() => {
     if (!mountRef.current) return;
     const mount = mountRef.current;
-    if (mount.clientWidth > 0 && mount.clientHeight > 0) {
-      setReady(true);
-      return;
-    }
+    if (mount.clientWidth > 0 && mount.clientHeight > 0) { setReady(true); return; }
     const ro = new ResizeObserver(() => {
-      if (mount.clientWidth > 0 && mount.clientHeight > 0) {
-        setReady(true);
-        ro.disconnect();
-      }
+      if (mount.clientWidth > 0 && mount.clientHeight > 0) { setReady(true); ro.disconnect(); }
     });
     ro.observe(mount);
     return () => ro.disconnect();
   }, []);
 
-  // Initialize Three.js once container is ready
+  // Initialize Three.js
   useEffect(() => {
     if (!ready || !mountRef.current) return;
     const mount = mountRef.current;
-    const w = mount.clientWidth;
-    const h = mount.clientHeight;
+    const w = mount.clientWidth, h = mount.clientHeight;
 
     const scene = new THREE.Scene();
     scene.background = null;
@@ -70,7 +414,7 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
     camera.lookAt(0, 3, 0);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
@@ -88,8 +432,7 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
     scene.add(rimLight);
 
     const handleResize = () => {
-      const ww = mount.clientWidth;
-      const hh = mount.clientHeight;
+      const ww = mount.clientWidth, hh = mount.clientHeight;
       if (ww === 0 || hh === 0) return;
       camera.aspect = ww / hh;
       camera.updateProjectionMatrix();
@@ -97,12 +440,12 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
     };
     window.addEventListener("resize", handleResize);
 
-    const onMouseDown = (e) => {
+    const onDown = (e) => {
       mouseRef.current.isDown = true;
       mouseRef.current.lastX = e.clientX || e.touches?.[0]?.clientX || 0;
       mouseRef.current.lastY = e.clientY || e.touches?.[0]?.clientY || 0;
     };
-    const onMouseMove = (e) => {
+    const onMove = (e) => {
       if (!mouseRef.current.isDown) return;
       const x = e.clientX || e.touches?.[0]?.clientX || 0;
       const y = e.clientY || e.touches?.[0]?.clientY || 0;
@@ -112,33 +455,32 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
       mouseRef.current.lastX = x;
       mouseRef.current.lastY = y;
     };
-    const onMouseUp = () => { mouseRef.current.isDown = false; };
+    const onUp = () => { mouseRef.current.isDown = false; };
 
-    mount.addEventListener("mousedown", onMouseDown);
-    mount.addEventListener("mousemove", onMouseMove);
-    mount.addEventListener("mouseup", onMouseUp);
-    mount.addEventListener("mouseleave", onMouseUp);
-    mount.addEventListener("touchstart", onMouseDown, { passive: true });
-    mount.addEventListener("touchmove", onMouseMove, { passive: true });
-    mount.addEventListener("touchend", onMouseUp);
+    mount.addEventListener("mousedown", onDown);
+    mount.addEventListener("mousemove", onMove);
+    mount.addEventListener("mouseup", onUp);
+    mount.addEventListener("mouseleave", onUp);
+    mount.addEventListener("touchstart", onDown, { passive: true });
+    mount.addEventListener("touchmove", onMove, { passive: true });
+    mount.addEventListener("touchend", onUp);
 
     return () => {
       window.removeEventListener("resize", handleResize);
-      mount.removeEventListener("mousedown", onMouseDown);
-      mount.removeEventListener("mousemove", onMouseMove);
-      mount.removeEventListener("mouseup", onMouseUp);
-      mount.removeEventListener("mouseleave", onMouseUp);
-      mount.removeEventListener("touchstart", onMouseDown);
-      mount.removeEventListener("touchmove", onMouseMove);
-      mount.removeEventListener("touchend", onMouseUp);
+      mount.removeEventListener("mousedown", onDown);
+      mount.removeEventListener("mousemove", onMove);
+      mount.removeEventListener("mouseup", onUp);
+      mount.removeEventListener("mouseleave", onUp);
+      mount.removeEventListener("touchstart", onDown);
+      mount.removeEventListener("touchmove", onMove);
+      mount.removeEventListener("touchend", onUp);
       cancelAnimationFrame(frameRef.current);
       renderer.dispose();
-      if (mount.contains(renderer.domElement)) {
-        mount.removeChild(renderer.domElement);
-      }
+      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
   }, [ready]);
 
+  // Render bricks
   useEffect(() => {
     const scene = sceneRef.current;
     const renderer = rendererRef.current;
@@ -147,62 +489,38 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
 
     while (scene.children.length > 3) {
       const child = scene.children[3];
-      if (child.geometry) child.geometry.dispose();
-      if (child.material) child.material.dispose();
+      child.traverse(c => {
+        if (c.geometry) c.geometry.dispose();
+        if (c.material) c.material.dispose();
+      });
       scene.remove(child);
     }
 
     const group = new THREE.Group();
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
 
-    const visibleBricks = highlightStep !== undefined
-      ? bricks.filter((b) => b.step <= highlightStep)
-      : bricks;
+    const visibleBricks = highlightStep !== undefined ? bricks.filter(b => b.step <= highlightStep) : bricks;
 
-    visibleBricks.forEach((brick) => {
-      const bw = (brick.width || 1);
-      const bd = (brick.depth || 1);
-      const bh = (brick.height || 1);
-      const unitW = bw * 0.8;
-      const unitD = bd * 0.8;
-      const unitH = bh * 0.32;
-
-      const color = new THREE.Color(LEGO_COLORS[brick.color] || brick.color || "#C4281B");
+    visibleBricks.forEach(brick => {
       const isHighlighted = highlightStep !== undefined && brick.step === highlightStep;
       const isGhosted = highlightStep !== undefined && brick.step < highlightStep;
+      const pieceGroup = createPieceGroup(brick, isHighlighted, isGhosted);
+      const px = (brick.x || 0) * STUD;
+      const py = (brick.y || 0) * BRICK_H;
+      const pz = (brick.z || 0) * STUD;
+      pieceGroup.position.set(px, py, pz);
+      group.add(pieceGroup);
 
-      const mat = new THREE.MeshPhysicalMaterial({
-        color, roughness: 0.35, metalness: 0.0, clearcoat: 0.4, clearcoatRoughness: 0.25,
-        transparent: isGhosted, opacity: isGhosted ? 0.3 : 1,
-      });
-      if (isHighlighted) mat.emissive = color.clone().multiplyScalar(0.2);
-
-      const brickGeo = new THREE.BoxGeometry(unitW - 0.04, unitH - 0.02, unitD - 0.04);
-      const brickMesh = new THREE.Mesh(brickGeo, mat);
-      const px = (brick.x || 0) * 0.8;
-      const py = (brick.y || 0) * 0.32;
-      const pz = (brick.z || 0) * 0.8;
-      brickMesh.position.set(px, py + unitH / 2, pz);
-      brickMesh.castShadow = true;
-      brickMesh.receiveShadow = true;
-      group.add(brickMesh);
-
-      const studGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.12, 16);
-      for (let sx = 0; sx < bw; sx++) {
-        for (let sz = 0; sz < bd; sz++) {
-          const stud = new THREE.Mesh(studGeo, mat);
-          stud.position.set(px - (unitW / 2) + 0.4 + sx * 0.8, py + unitH + 0.06, pz - (unitD / 2) + 0.4 + sz * 0.8);
-          stud.castShadow = true;
-          group.add(stud);
-        }
-      }
-
-      minX = Math.min(minX, px - unitW / 2); maxX = Math.max(maxX, px + unitW / 2);
-      minY = Math.min(minY, py); maxY = Math.max(maxY, py + unitH);
-      minZ = Math.min(minZ, pz - unitD / 2); maxZ = Math.max(maxZ, pz + unitD / 2);
+      const bw = (brick.width || 1) * STUD;
+      const bd = (brick.depth || 1) * STUD;
+      const bh = (brick.height || 1) * BRICK_H;
+      minX = Math.min(minX, px); maxX = Math.max(maxX, px + bw);
+      minY = Math.min(minY, py); maxY = Math.max(maxY, py + bh);
+      minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz + bd);
     });
 
     scene.add(group);
+
     const cx = (minX + maxX) / 2 || 0;
     const cy = (minY + maxY) / 2 || 0;
     const cz = (minZ + maxZ) / 2 || 0;
@@ -223,9 +541,12 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
   }, [bricks, highlightStep, rotateAuto, ready]);
 
   return <div ref={mountRef} style={{ width: "100%", height: "100%", cursor: "grab", borderRadius: "16px", overflow: "hidden" }} />;
-}
+});
 
-// ─── PIECE CARD ───
+// ═══════════════════════════════════════════
+// PIECE INVENTORY ICONS
+// ═══════════════════════════════════════════
+
 function PieceCard({ piece }) {
   const canvasRef = useRef(null);
   useEffect(() => {
@@ -235,30 +556,115 @@ function PieceCard({ piece }) {
     const w = canvas.width, h = canvas.height;
     ctx.clearRect(0, 0, w, h);
     const color = LEGO_COLORS[piece.color] || piece.color || "#C4281B";
+    const type = piece.type || "brick";
     const bw = piece.width || 1, bd = piece.depth || 1;
     const scale = Math.min((w - 20) / (bw * 22 + 10), (h - 20) / (bd * 22 + 18));
     const ox = (w - bw * 22 * scale) / 2;
     const oy = (h - (bd * 22 + 12) * scale) / 2 + 4;
+    const brickW = bw * 22 * scale, brickD = bd * 22 * scale;
+    const sideH = 12 * scale;
     ctx.save();
-    const topY = oy, brickW = bw * 22 * scale, brickD = bd * 22 * scale, sideH = 12 * scale;
-    ctx.fillStyle = shade(color, -30); ctx.strokeStyle = "rgba(0,0,0,0.15)"; ctx.lineWidth = 1;
-    ctx.fillRect(ox, topY + brickD, brickW, sideH); ctx.strokeRect(ox, topY + brickD, brickW, sideH);
-    ctx.fillStyle = color; ctx.fillRect(ox, topY, brickW, brickD); ctx.strokeRect(ox, topY, brickW, brickD);
-    for (let sx = 0; sx < bw; sx++) {
-      for (let sz = 0; sz < bd; sz++) {
-        ctx.beginPath();
-        ctx.arc(ox + sx * 22 * scale + 11 * scale, topY + sz * 22 * scale + 11 * scale, 7 * scale, 0, Math.PI * 2);
-        ctx.fillStyle = shade(color, 15); ctx.fill(); ctx.strokeStyle = "rgba(0,0,0,0.2)"; ctx.stroke();
+    ctx.strokeStyle = "rgba(0,0,0,0.2)"; ctx.lineWidth = 1;
+
+    if (type === "cone" || type === "cylinder" || type === "round_brick") {
+      const cx = ox + brickW / 2, cy = oy + brickD / 2;
+      const r = Math.min(brickW, brickD) / 2;
+      // Side
+      ctx.fillStyle = shade(color, -25);
+      ctx.beginPath();
+      ctx.ellipse(cx, oy + brickD, r, sideH * 0.4, 0, 0, Math.PI);
+      ctx.lineTo(cx + r, oy + brickD - sideH);
+      ctx.ellipse(cx, oy + brickD - sideH, r, sideH * 0.4, 0, 0, Math.PI, true);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      // Top
+      ctx.fillStyle = type === "cone" ? shade(color, 20) : color;
+      ctx.beginPath();
+      if (type === "cone") {
+        const r2 = r * 0.2;
+        ctx.ellipse(cx, oy + brickD - sideH, r2, sideH * 0.4, 0, 0, Math.PI * 2);
+      } else {
+        ctx.ellipse(cx, oy + brickD - sideH, r, sideH * 0.4, 0, 0, Math.PI * 2);
+      }
+      ctx.fill(); ctx.stroke();
+    } else if (type === "slope") {
+      // Draw a triangular wedge profile
+      ctx.fillStyle = shade(color, -25);
+      ctx.beginPath();
+      ctx.moveTo(ox, oy + brickD + sideH);
+      ctx.lineTo(ox + brickW, oy + brickD + sideH);
+      ctx.lineTo(ox + brickW, oy);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(ox, oy + brickD);
+      ctx.lineTo(ox + brickW, oy);
+      ctx.lineTo(ox + brickW, oy + brickD);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+    } else if (type === "wedge") {
+      // Triangular footprint
+      ctx.fillStyle = shade(color, -25);
+      ctx.fillRect(ox, oy + brickD, brickW, sideH);
+      ctx.strokeRect(ox, oy + brickD, brickW, sideH);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      const dir = piece.direction || "sw";
+      switch (dir) {
+        case "sw": ctx.moveTo(ox, oy); ctx.lineTo(ox + brickW, oy); ctx.lineTo(ox, oy + brickD); break;
+        case "se": ctx.moveTo(ox + brickW, oy); ctx.lineTo(ox + brickW, oy + brickD); ctx.lineTo(ox, oy); break;
+        case "ne": ctx.moveTo(ox + brickW, oy + brickD); ctx.lineTo(ox, oy + brickD); ctx.lineTo(ox + brickW, oy); break;
+        case "nw": ctx.moveTo(ox, oy + brickD); ctx.lineTo(ox, oy); ctx.lineTo(ox + brickW, oy + brickD); break;
+      }
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+    } else {
+      // Default brick rendering (also for tile, plate, arch)
+      ctx.fillStyle = shade(color, -30);
+      ctx.fillRect(ox, oy + brickD, brickW, sideH); ctx.strokeRect(ox, oy + brickD, brickW, sideH);
+      ctx.fillStyle = color;
+      ctx.fillRect(ox, oy, brickW, brickD); ctx.strokeRect(ox, oy, brickW, brickD);
+      // Studs (only for brick/plate)
+      if (type === "brick" || type === "plate") {
+        for (let sx = 0; sx < bw; sx++) {
+          for (let sz = 0; sz < bd; sz++) {
+            ctx.beginPath();
+            ctx.arc(ox + sx * 22 * scale + 11 * scale, oy + sz * 22 * scale + 11 * scale, 7 * scale, 0, Math.PI * 2);
+            ctx.fillStyle = shade(color, 15); ctx.fill();
+            ctx.strokeStyle = "rgba(0,0,0,0.2)"; ctx.stroke();
+          }
+        }
       }
     }
     ctx.restore();
   }, [piece]);
+
+  const typeLabel = (() => {
+    const t = piece.type || "brick";
+    const dir = piece.direction;
+    const dirLabel = dir ? ` (${dir})` : "";
+    if (t === "brick") return "Brick";
+    if (t === "tile") return "Tile";
+    if (t === "plate") return "Plate";
+    if (t === "slope") return `Slope${dirLabel}`;
+    if (t === "slope_inv") return `Inv Slope${dirLabel}`;
+    if (t === "wedge") return `Wedge${dirLabel}`;
+    if (t === "cone") return "Cone";
+    if (t === "cylinder") return "Cylinder";
+    if (t === "round_brick") return "Round Brick";
+    if (t === "arch") return "Arch";
+    return "Brick";
+  })();
+
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 14px", background: "rgba(255,255,255,0.06)", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.08)" }}>
       <canvas ref={canvasRef} width={80} height={60} style={{ flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: "13px", color: "#f0f0f0", textTransform: "capitalize" }}>{piece.width}×{piece.depth}{piece.height > 1 ? `×${piece.height}` : ""} {piece.color}</div>
-        <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.55)", marginTop: "2px" }}>{piece.label || "Brick"}</div>
+        <div style={{ fontWeight: 700, fontSize: "13px", color: "#f0f0f0", textTransform: "capitalize" }}>
+          {piece.width}×{piece.depth}{piece.height > 1 ? `×${piece.height}` : ""} {piece.color}
+        </div>
+        <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.55)", marginTop: "2px" }}>{typeLabel}</div>
       </div>
       <div style={{ fontWeight: 800, fontSize: "20px", color: LEGO_COLORS[piece.color] || "#fff", fontFamily: "'Fredoka', sans-serif" }}>×{piece.count}</div>
     </div>
@@ -284,34 +690,39 @@ export default function LegoBuilder() {
   const [error, setError] = useState(null);
   const [loadingMsg, setLoadingMsg] = useState("");
 
-  // Choose screen
   const [easyBuild, setEasyBuild] = useState(null);
   const [mediumBuild, setMediumBuild] = useState(null);
   const [advancedBuild, setAdvancedBuild] = useState(null);
   const [selectedDifficulty, setSelectedDifficulty] = useState(null);
   const [tweakInput, setTweakInput] = useState("");
   const [isTweaking, setIsTweaking] = useState(false);
+  const [isRefining, setIsRefining] = useState(false);
   const [originalRequest, setOriginalRequest] = useState("");
+  const [inspiration, setInspiration] = useState(null);
 
-  // Build screen
   const [buildData, setBuildData] = useState(null);
   const [currentStep, setCurrentStep] = useState(-1);
   const [showPieces, setShowPieces] = useState(false);
+
+  const easyCanvasRef = useRef(null);
+  const mediumCanvasRef = useRef(null);
+  const advancedCanvasRef = useRef(null);
 
   const loadingMsgs = useMemo(() => [
     "🧱 Sorting through the brick bin...", "🔍 Finding the perfect pieces...",
     "📐 Measuring stud connections...", "🎨 Picking the best colors...",
     "🏗️ Snapping bricks together...", "✨ Adding the finishing touches...",
     "🧠 Thinking like a Master Builder...", "📋 Writing the instructions...",
+    "🔺 Adding slopes and wedges...", "🎯 Refining the design...",
   ], []);
 
   useEffect(() => {
-    if (!isGenerating && !isTweaking) return;
+    if (!isGenerating && !isTweaking && !isRefining) return;
     let i = 0;
     setLoadingMsg(loadingMsgs[0]);
     const iv = setInterval(() => { i = (i + 1) % loadingMsgs.length; setLoadingMsg(loadingMsgs[i]); }, 2200);
     return () => clearInterval(iv);
-  }, [isGenerating, isTweaking, loadingMsgs]);
+  }, [isGenerating, isTweaking, isRefining, loadingMsgs]);
 
   const callAI = useCallback(async (messages) => {
     const response = await fetch("/api/generate", {
@@ -324,7 +735,19 @@ export default function LegoBuilder() {
     return data.content?.map(c => c.text || "").join("") || "";
   }, []);
 
-  // ─── Submit: generates Easy + Advanced ───
+  const fetchInspiration = useCallback(async (query) => {
+    try {
+      const r = await fetch("/api/inspiration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data.set) setInspiration(data);
+    } catch (e) { /* silent fail */ }
+  }, []);
+
   const handleSubmit = useCallback(async (customInput) => {
     const val = (customInput || input).trim();
     if (!val || isGenerating) return;
@@ -332,9 +755,13 @@ export default function LegoBuilder() {
     setError(null);
     setInput("");
     setOriginalRequest(val);
+    setInspiration(null);
 
     const newHistory = [...chatHistory, { role: "user", content: val }];
     setChatHistory(newHistory);
+
+    // Parallel inspiration fetch
+    fetchInspiration(val);
 
     try {
       const apiMessages = newHistory.map(m => ({ role: m.role, content: m.content }));
@@ -360,23 +787,17 @@ export default function LegoBuilder() {
         setSelectedDifficulty(null);
         setScreen("choose");
       } else if (parsed.type === "build") {
-        // Fallback single build
         setChatHistory([...newHistory, { role: "assistant", content: JSON.stringify(parsed) }]);
-        setEasyBuild(parsed);
-        setMediumBuild(null);
-        setAdvancedBuild(null);
-        setBuildData(parsed);
-        setCurrentStep(-1);
-        setScreen("build");
+        setEasyBuild(parsed); setMediumBuild(null); setAdvancedBuild(null);
+        setBuildData(parsed); setCurrentStep(-1); setScreen("build");
       }
     } catch (err) {
       setError("Oops! Something went wrong. Try again!");
       console.error(err);
     }
     setIsGenerating(false);
-  }, [input, isGenerating, chatHistory, callAI]);
+  }, [input, isGenerating, chatHistory, callAI, fetchInspiration]);
 
-  // ─── Tweak selected build ───
   const handleTweak = useCallback(async () => {
     const val = tweakInput.trim();
     if (!val || isTweaking || !selectedDifficulty) return;
@@ -385,12 +806,12 @@ export default function LegoBuilder() {
     setTweakInput("");
 
     const currentBuild = selectedDifficulty === "easy" ? easyBuild : selectedDifficulty === "medium" ? mediumBuild : advancedBuild;
-    const difficultyDesc = selectedDifficulty === "easy" ? "easy (15-25 bricks, 4-5 steps)" : selectedDifficulty === "medium" ? "medium (40-65 bricks, 6-9 steps)" : "advanced (100-130 bricks, 10-15 steps)";
+    const desc = selectedDifficulty === "easy" ? "easy (15-25 bricks, 4-5 steps)" : selectedDifficulty === "medium" ? "medium (40-65 bricks, 6-9 steps)" : "advanced (100-130 bricks, 10-15 steps)";
 
     try {
       const tweakMessages = [{
         role: "user",
-        content: `I have this ${difficultyDesc} LEGO build called "${currentBuild.name}": ${JSON.stringify(currentBuild)}\n\nThe user wants this change: "${val}"\n\nPlease generate an updated version with the requested change. Keep it at the same difficulty level (${difficultyDesc}). Respond with ONLY a JSON object with type "build", name, description, bricks array, and steps array. No markdown.`
+        content: `I have this ${desc} LEGO build called "${currentBuild.name}": ${JSON.stringify(currentBuild)}\n\nThe user wants this change: "${val}"\n\nGenerate an updated version with the requested change. Keep difficulty at ${desc}. Use slopes, wedges, cones, cylinders for better shapes. Respond with ONLY a JSON object with type "build", name, description, bricks array, and steps array. No markdown.`
       }];
 
       const response = await callAI(tweakMessages);
@@ -409,12 +830,58 @@ export default function LegoBuilder() {
     setIsTweaking(false);
   }, [tweakInput, isTweaking, selectedDifficulty, easyBuild, mediumBuild, advancedBuild, callAI]);
 
+  const handleRefine = useCallback(async () => {
+    if (isRefining || !selectedDifficulty) return;
+    const ref = selectedDifficulty === "easy" ? easyCanvasRef : selectedDifficulty === "medium" ? mediumCanvasRef : advancedCanvasRef;
+    const canvas = ref.current;
+    if (!canvas?.capture) return;
+
+    const imageDataUrl = canvas.capture();
+    if (!imageDataUrl) return;
+
+    setIsRefining(true);
+    setError(null);
+
+    const currentBuild = selectedDifficulty === "easy" ? easyBuild : selectedDifficulty === "medium" ? mediumBuild : advancedBuild;
+    const desc = selectedDifficulty === "easy" ? "easy (15-25 bricks)" : selectedDifficulty === "medium" ? "medium (40-65 bricks)" : "advanced (100-130 bricks)";
+
+    try {
+      const r = await fetch("/api/refine", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          build: currentBuild,
+          imageDataUrl,
+          originalRequest,
+          difficulty: desc,
+        }),
+      });
+      if (!r.ok) throw new Error(`Refine error ${r.status}`);
+      const data = await r.json();
+      const text = data.content?.map(c => c.text || "").join("") || "";
+      const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      if (parsed.bricks) {
+        if (!parsed.type) parsed.type = "build";
+        if (selectedDifficulty === "easy") setEasyBuild(parsed);
+        else if (selectedDifficulty === "medium") setMediumBuild(parsed);
+        else setAdvancedBuild(parsed);
+      }
+    } catch (err) {
+      console.error("Refine failed:", err);
+      setError("Refinement failed — give it another shot!");
+    }
+    setIsRefining(false);
+  }, [isRefining, selectedDifficulty, easyBuild, mediumBuild, advancedBuild, originalRequest]);
+
   const pieces = useMemo(() => {
     if (!buildData?.bricks) return [];
     const map = {};
     buildData.bricks.forEach(b => {
-      const key = `${b.width}x${b.depth}x${b.height || 1}-${b.color}`;
-      if (!map[key]) map[key] = { width: b.width, depth: b.depth, height: b.height || 1, color: b.color, count: 0, label: b.label || "Brick" };
+      const t = b.type || "brick";
+      const dir = b.direction || "";
+      const key = `${t}-${b.width}x${b.depth}x${b.height || 1}-${b.color}-${dir}`;
+      if (!map[key]) map[key] = { type: t, direction: b.direction, width: b.width, depth: b.depth, height: b.height || 1, color: b.color, count: 0, label: b.label || "" };
       map[key].count++;
     });
     return Object.values(map).sort((a, b) => b.count - a.count);
@@ -426,12 +893,10 @@ export default function LegoBuilder() {
   const resetAll = () => {
     setScreen("home"); setBuildData(null); setEasyBuild(null); setMediumBuild(null); setAdvancedBuild(null);
     setSelectedDifficulty(null); setChatHistory([]); setShowPieces(false);
-    setError(null); setTweakInput(""); setCurrentStep(-1);
+    setError(null); setTweakInput(""); setCurrentStep(-1); setInspiration(null);
   };
 
-  // ═══════════════════════════════════════════
-  // HOME
-  // ═══════════════════════════════════════════
+  // ═══════════ HOME ═══════════
   if (screen === "home") {
     return (
       <div style={S.container}>
@@ -445,7 +910,9 @@ export default function LegoBuilder() {
                 ))}
               </div>
               <h1 style={S.title}>Brick Builder</h1>
-              <p style={{ fontSize: 16, color: "rgba(255,255,255,0.6)", margin: 0, maxWidth: 400 }}>Describe anything and get two LEGO builds to choose from — Easy or Advanced!</p>
+              <p style={{ fontSize: 16, color: "rgba(255,255,255,0.6)", margin: 0, maxWidth: 440 }}>
+                Describe anything and get three LEGO builds — Easy, Medium, or Advanced. Now with slopes, wedges, cones, and more!
+              </p>
             </div>
           </div>
 
@@ -463,7 +930,7 @@ export default function LegoBuilder() {
           <div style={{ marginTop: 8 }}>
             <p style={S.ideasLabel}>Need ideas? Try these:</p>
             <div style={S.ideasGrid}>
-              {[["🏠", "A cozy house with a chimney"], ["🚀", "A rocket ship"], ["🏰", "Medieval castle with towers"], ["🚗", "A race car"], ["🌳", "A tree with a treehouse"], ["🤖", "A friendly robot"]].map(([emoji, idea], i) => (
+              {[["🚀", "Star Wars X-Wing"], ["🏰", "Medieval castle"], ["🚗", "Race car"], ["🏠", "Cozy house with chimney"], ["🌳", "Tree with treehouse"], ["🤖", "Friendly robot"]].map(([emoji, idea], i) => (
                 <button key={i} style={S.ideaChip} onClick={() => { setInput(idea); handleSubmit(idea); }} disabled={isGenerating}>
                   <span style={{ fontSize: 20 }}>{emoji}</span><span>{idea}</span>
                 </button>
@@ -475,9 +942,7 @@ export default function LegoBuilder() {
     );
   }
 
-  // ═══════════════════════════════════════════
-  // CHAT (clarifying questions)
-  // ═══════════════════════════════════════════
+  // ═══════════ CHAT ═══════════
   if (screen === "chat") {
     const msgs = chatHistory.filter(m => { if (m.role === "assistant") { try { JSON.parse(m.content); return false; } catch { return true; } } return true; });
     return (
@@ -506,9 +971,7 @@ export default function LegoBuilder() {
     );
   }
 
-  // ═══════════════════════════════════════════
-  // CHOOSE (Easy vs Advanced + Tweaks)
-  // ═══════════════════════════════════════════
+  // ═══════════ CHOOSE ═══════════
   if (screen === "choose") {
     return (
       <div style={S.container}>
@@ -523,8 +986,23 @@ export default function LegoBuilder() {
             <div style={{ width: 90 }} />
           </div>
 
+          {inspiration?.set && (
+            <div style={S.inspirationBar}>
+              <span style={{ fontSize: 16 }}>💡</span>
+              <span style={{ fontSize: 13, color: "rgba(255,255,255,0.7)" }}>
+                Inspired by <strong style={{ color: "#F5CD2F" }}>LEGO {inspiration.set.name}</strong>
+                {inspiration.set.year && ` (${inspiration.set.year})`}
+                {inspiration.set.num_parts && ` • ${inspiration.set.num_parts} parts in real set`}
+              </span>
+              {inspiration.set.set_img_url && (
+                <a href={inspiration.set.set_img_url} target="_blank" rel="noopener noreferrer" style={{ marginLeft: "auto", color: "#068BC9", fontSize: 12, textDecoration: "underline" }}>
+                  View reference →
+                </a>
+              )}
+            </div>
+          )}
+
           <div style={S.chooseBody}>
-            {/* Easy */}
             <div style={{ ...S.chooseCard, borderColor: selectedDifficulty === "easy" ? LEGO_COLORS.green : "rgba(255,255,255,0.1)", boxShadow: selectedDifficulty === "easy" ? `0 0 20px ${LEGO_COLORS.green}40` : "none" }} onClick={() => setSelectedDifficulty("easy")}>
               <div style={S.chooseBadgeRow}>
                 <span style={{ ...S.chooseBadge, background: "rgba(35,120,65,0.3)", color: LEGO_COLORS.green }}>⭐ Easy</span>
@@ -532,11 +1010,10 @@ export default function LegoBuilder() {
               </div>
               <h3 style={S.chooseCardTitle}>{easyBuild?.name || "Easy Build"}</h3>
               <p style={S.chooseCardDesc}>{easyBuild?.description}</p>
-              <div style={S.chooseCanvasWrap}>{easyBuild?.bricks && <LegoCanvas bricks={easyBuild.bricks} rotateAuto={true} />}</div>
+              <div style={S.chooseCanvasWrap}>{easyBuild?.bricks && <LegoCanvas ref={easyCanvasRef} bricks={easyBuild.bricks} rotateAuto={true} />}</div>
               <div style={S.chooseStepCount}>{easyBuild?.steps?.length || 0} steps</div>
             </div>
 
-            {/* Medium */}
             {mediumBuild && (
               <div style={{ ...S.chooseCard, borderColor: selectedDifficulty === "medium" ? LEGO_COLORS.blue : "rgba(255,255,255,0.1)", boxShadow: selectedDifficulty === "medium" ? `0 0 20px ${LEGO_COLORS.blue}40` : "none" }} onClick={() => setSelectedDifficulty("medium")}>
                 <div style={S.chooseBadgeRow}>
@@ -545,12 +1022,11 @@ export default function LegoBuilder() {
                 </div>
                 <h3 style={S.chooseCardTitle}>{mediumBuild?.name || "Medium Build"}</h3>
                 <p style={S.chooseCardDesc}>{mediumBuild?.description}</p>
-                <div style={S.chooseCanvasWrap}>{mediumBuild?.bricks && <LegoCanvas bricks={mediumBuild.bricks} rotateAuto={true} />}</div>
+                <div style={S.chooseCanvasWrap}>{mediumBuild?.bricks && <LegoCanvas ref={mediumCanvasRef} bricks={mediumBuild.bricks} rotateAuto={true} />}</div>
                 <div style={S.chooseStepCount}>{mediumBuild?.steps?.length || 0} steps</div>
               </div>
             )}
 
-            {/* Advanced */}
             {advancedBuild && (
               <div style={{ ...S.chooseCard, borderColor: selectedDifficulty === "advanced" ? LEGO_COLORS.orange : "rgba(255,255,255,0.1)", boxShadow: selectedDifficulty === "advanced" ? `0 0 20px ${LEGO_COLORS.orange}40` : "none" }} onClick={() => setSelectedDifficulty("advanced")}>
                 <div style={S.chooseBadgeRow}>
@@ -559,7 +1035,7 @@ export default function LegoBuilder() {
                 </div>
                 <h3 style={S.chooseCardTitle}>{advancedBuild?.name || "Advanced Build"}</h3>
                 <p style={S.chooseCardDesc}>{advancedBuild?.description}</p>
-                <div style={S.chooseCanvasWrap}>{advancedBuild?.bricks && <LegoCanvas bricks={advancedBuild.bricks} rotateAuto={true} />}</div>
+                <div style={S.chooseCanvasWrap}>{advancedBuild?.bricks && <LegoCanvas ref={advancedCanvasRef} bricks={advancedBuild.bricks} rotateAuto={true} />}</div>
                 <div style={S.chooseStepCount}>{advancedBuild?.steps?.length || 0} steps</div>
               </div>
             )}
@@ -568,13 +1044,16 @@ export default function LegoBuilder() {
           <div style={S.chooseFooter}>
             {selectedDifficulty && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input style={S.tweakInput} value={tweakInput} onChange={e => setTweakInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleTweak()} placeholder="Want changes? Try: make it black, make it bigger, add a flag..." disabled={isTweaking} />
-                  <button style={{ ...S.tweakBtn, opacity: (!tweakInput.trim() || isTweaking) ? 0.5 : 1 }} onClick={handleTweak} disabled={!tweakInput.trim() || isTweaking}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <input style={S.tweakInput} value={tweakInput} onChange={e => setTweakInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleTweak()} placeholder="Want changes? Try: make it black, make it bigger, add a flag..." disabled={isTweaking || isRefining} />
+                  <button style={{ ...S.tweakBtn, opacity: (!tweakInput.trim() || isTweaking || isRefining) ? 0.5 : 1 }} onClick={handleTweak} disabled={!tweakInput.trim() || isTweaking || isRefining}>
                     {isTweaking ? "✨ Updating..." : "✏️ Tweak"}
                   </button>
+                  <button style={{ ...S.refineBtn, opacity: (isRefining || isTweaking) ? 0.5 : 1 }} onClick={handleRefine} disabled={isRefining || isTweaking} title="Have AI look at the current build and improve it">
+                    {isRefining ? "👁️ Looking..." : "👁️ Refine"}
+                  </button>
                 </div>
-                {isTweaking && <div style={S.loadingBar}><div style={S.loadingFill} /><span style={S.loadingText}>{loadingMsg}</span></div>}
+                {(isTweaking || isRefining) && <div style={S.loadingBar}><div style={S.loadingFill} /><span style={S.loadingText}>{loadingMsg}</span></div>}
                 {error && <div style={S.error}>{error}</div>}
               </div>
             )}
@@ -592,9 +1071,7 @@ export default function LegoBuilder() {
     );
   }
 
-  // ═══════════════════════════════════════════
-  // BUILD
-  // ═══════════════════════════════════════════
+  // ═══════════ BUILD ═══════════
   return (
     <div style={S.container}>
       <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
@@ -616,7 +1093,7 @@ export default function LegoBuilder() {
           {showPieces && (
             <div style={S.piecesPanel}>
               <h3 style={S.piecesPanelTitle}>📦 Pieces Needed</h3>
-              <div style={S.piecesCount}>{buildData?.bricks?.length || 0} bricks • {pieces.length} types</div>
+              <div style={S.piecesCount}>{buildData?.bricks?.length || 0} pieces • {pieces.length} types</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{pieces.map((p, i) => <PieceCard key={i} piece={p} />)}</div>
             </div>
           )}
@@ -637,7 +1114,7 @@ export default function LegoBuilder() {
                 <h3 style={S.stepTitle}>This is what you're building!</h3>
               </div>
               <p style={S.stepDesc}>Take a good look — spin it around! Hit "Start Building" when you're ready.</p>
-              <div style={S.stepBricks}><span style={{ fontSize: 13, color: "rgba(255,255,255,0.5)", fontWeight: 600 }}>{buildData?.bricks?.length || 0} bricks • {totalSteps} steps</span></div>
+              <div style={S.stepBricks}><span style={{ fontSize: 13, color: "rgba(255,255,255,0.5)", fontWeight: 600 }}>{buildData?.bricks?.length || 0} pieces • {totalSteps} steps</span></div>
             </div>
           ) : (
             <div style={S.stepCard}>
@@ -650,7 +1127,8 @@ export default function LegoBuilder() {
                 {currentStepData?.brickIds?.map(id => {
                   const brick = buildData.bricks.find(b => b.id === id);
                   if (!brick) return null;
-                  return <span key={id} style={{ ...S.stepBrickChip, borderColor: LEGO_COLORS[brick.color] || "#fff", color: LEGO_COLORS[brick.color] || "#fff" }}>{brick.width}×{brick.depth} {brick.color}</span>;
+                  const t = brick.type || "brick";
+                  return <span key={id} style={{ ...S.stepBrickChip, borderColor: LEGO_COLORS[brick.color] || "#fff", color: LEGO_COLORS[brick.color] || "#fff" }}>{brick.width}×{brick.depth} {brick.color} {t !== "brick" ? t : ""}</span>;
                 })}
               </div>
             </div>
@@ -702,6 +1180,7 @@ const S = {
   backBtn: { padding: "8px 14px", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Nunito', sans-serif", whiteSpace: "nowrap" },
   chooseWrapper: { height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" },
   chooseHeader: { display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 },
+  inspirationBar: { display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", background: "rgba(245,205,47,0.05)", borderBottom: "1px solid rgba(245,205,47,0.1)", flexShrink: 0 },
   chooseBody: { flex: 1, display: "flex", gap: 16, padding: 16, overflow: "auto", minHeight: 0 },
   chooseCard: { flex: 1, minWidth: 0, background: "rgba(255,255,255,0.04)", border: "2px solid rgba(255,255,255,0.1)", borderRadius: 20, padding: 16, cursor: "pointer", transition: "all 0.25s", display: "flex", flexDirection: "column", gap: 8 },
   chooseBadgeRow: { display: "flex", justifyContent: "space-between", alignItems: "center" },
@@ -712,8 +1191,9 @@ const S = {
   chooseCanvasWrap: { height: 280, borderRadius: 12, overflow: "hidden", background: "rgba(0,0,0,0.2)" },
   chooseStepCount: { fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: 600, textAlign: "center" },
   chooseFooter: { flexShrink: 0, borderTop: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.25)", padding: "12px 16px 16px", display: "flex", flexDirection: "column", gap: 10 },
-  tweakInput: { flex: 1, padding: "12px 16px", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, color: "#fff", fontSize: 14, fontFamily: "'Nunito', sans-serif", fontWeight: 600, outline: "none" },
+  tweakInput: { flex: 1, minWidth: 200, padding: "12px 16px", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, color: "#fff", fontSize: 14, fontFamily: "'Nunito', sans-serif", fontWeight: 600, outline: "none" },
   tweakBtn: { padding: "12px 20px", background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 12, color: "#fff", fontWeight: 700, cursor: "pointer", fontFamily: "'Fredoka', sans-serif", fontSize: 14, whiteSpace: "nowrap" },
+  refineBtn: { padding: "12px 20px", background: "linear-gradient(135deg, #6B327B, #C9CAE2)", border: "none", borderRadius: 12, color: "#fff", fontWeight: 700, cursor: "pointer", fontFamily: "'Fredoka', sans-serif", fontSize: 14, whiteSpace: "nowrap" },
   buildItBtn: { padding: "14px 32px", fontSize: 18, fontWeight: 700, background: "linear-gradient(135deg, #237841, #A6CA55)", color: "#fff", border: "none", borderRadius: 14, cursor: "pointer", fontFamily: "'Fredoka', sans-serif", textAlign: "center", boxShadow: "0 4px 15px rgba(35,120,65,0.3)" },
   buildWrapper: { height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" },
   buildHeader: { display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 },
@@ -727,7 +1207,7 @@ const S = {
   piecesPanelTitle: { fontFamily: "'Fredoka', sans-serif", fontSize: 16, fontWeight: 600, margin: 0, color: "#F5CD2F" },
   piecesCount: { fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: 600, marginBottom: 4 },
   stepsBar: { flexShrink: 0, borderTop: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.25)", padding: "12px 16px 16px" },
-  stepProgress: { display: "flex", justifyContent: "center", gap: 6, marginBottom: 12 },
+  stepProgress: { display: "flex", justifyContent: "center", gap: 6, marginBottom: 12, flexWrap: "wrap" },
   stepDot: { width: 28, height: 28, borderRadius: 8, border: "none", cursor: "pointer", fontFamily: "'Fredoka', sans-serif", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" },
   stepCard: { background: "rgba(255,255,255,0.05)", borderRadius: 14, padding: "14px 18px", marginBottom: 10 },
   stepHeader: { display: "flex", alignItems: "center", gap: 10, marginBottom: 6 },
