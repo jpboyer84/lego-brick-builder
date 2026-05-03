@@ -101,13 +101,21 @@ BUILD FORMAT:
  "steps": [{"step": 1, "title": "Build the base", "description": "Place the foundation!", "brickIds": [1, 2]}, ...]}
 
 ═══════════════════════════════════════════
-DESIGN PRINCIPLES
+DESIGN PRINCIPLES — THINK BEFORE YOU BUILD
 ═══════════════════════════════════════════
-SILHOUETTE: What's the shape from the side? Build that profile using slopes/wedges.
-PROPORTIONS: Cars = wide & low. Rockets = tall & narrow.
-DISTINCTIVE FEATURES: X-Wing = 4 angled wings. House = peaked roof. Robot = limbs.
+Before generating bricks, STOP and think:
+1. What does this thing ACTUALLY look like in real life? Picture it.
+2. What's the silhouette from the side? From above? From the front?
+3. What are the 3-4 most recognizable features that make it THIS thing and not just a blob?
+4. How do I use piece types to capture those features?
+
+An X-Wing is NOT a flat rectangle with stuff on top. It's a long narrow fuselage with 4 large angled wings in an X pattern, with an engine pod at each wingtip and a pointed nose. The wings are THE defining feature — make them big, angled, and prominent using wedge pieces.
+
+A robot is NOT a stack of rectangles. It needs a clearly separate head, body, two arms sticking out to the sides, and two legs. Use cylinders for joints, round_bricks for eyes.
+
+PROPORTIONS: Cars = wide & low. Rockets = tall & narrow. Planes = long with wide wingspan.
 USE ALL 3 AXES: Real 3D volume, never flat.
-RIGHT PIECE FOR THE JOB: Wings = wedges. Noses = cones/slopes. Engines = cylinders. Roofs = slopes. Don't use only rectangular bricks!
+RIGHT PIECE: Wings = wedges. Noses = cones/slopes. Engines = cylinders. Roofs = slopes.
 
 REMEMBER: USE WEDGES, CONES, CYLINDERS, SLOPES. If everything is rectangular bricks, you've failed.`;
 

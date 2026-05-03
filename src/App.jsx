@@ -166,14 +166,14 @@ function createPieceGroup(brick, isHighlighted, isGhosted) {
 // 3D RENDERER (unchanged)
 // ═══════════════════════════════════════════
 
-const LegoCanvas = forwardRef(function LegoCanvas({ bricks, highlightStep, rotateAuto }, ref) {
+const LegoCanvas = forwardRef(function LegoCanvas({ bricks, highlightStep }, ref) {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const rendererRef = useRef(null);
   const cameraRef = useRef(null);
   const frameRef = useRef(null);
   const mouseRef = useRef({ isDown: false, lastX: 0, lastY: 0 });
-  const rotRef = useRef({ x: -0.5, y: 0.5 });
+  const rotRef = useRef({ x: -0.4, y: 0.6 });
   const [ready, setReady] = useState(false);
 
   useImperativeHandle(ref, () => ({
@@ -262,16 +262,18 @@ const LegoCanvas = forwardRef(function LegoCanvas({ bricks, highlightStep, rotat
     cancelAnimationFrame(frameRef.current);
     const animate = () => {
       frameRef.current = requestAnimationFrame(animate);
-      if (rotateAuto && !mouseRef.current.isDown) rotRef.current.y += 0.004;
+      // No auto-rotation — model stays still until the user drags
       const rx = rotRef.current.x, ry = rotRef.current.y;
-      camera.position.x = padded * Math.sin(ry) * Math.cos(rx);
-      camera.position.y = padded * Math.sin(-rx) + radius * 0.15;
-      camera.position.z = padded * Math.cos(ry) * Math.cos(rx);
+      // rx controls elevation (negative = looking from above), ry controls horizontal angle
+      const cosRx = Math.cos(rx);
+      camera.position.x = padded * Math.sin(ry) * cosRx;
+      camera.position.y = padded * -Math.sin(rx);
+      camera.position.z = padded * Math.cos(ry) * cosRx;
       camera.lookAt(0, 0, 0);
       renderer.render(scene, camera);
     };
     animate();
-  }, [bricks, highlightStep, rotateAuto, ready]);
+  }, [bricks, highlightStep, ready]);
 
   return <div ref={mountRef} style={{ width: "100%", height: "100%", cursor: "grab", borderRadius: "16px", overflow: "hidden" }} />;
 });
@@ -648,7 +650,7 @@ export default function LegoBuilder() {
 
         <div style={S.buildBody}>
           <div style={S.canvasArea}>
-            <LegoCanvas ref={buildCanvasRef} bricks={buildData?.bricks || []} highlightStep={currentStep === -1 ? undefined : currentStep + 1} rotateAuto={true} />
+            <LegoCanvas ref={buildCanvasRef} bricks={buildData?.bricks || []} highlightStep={currentStep === -1 ? undefined : currentStep + 1} />
             <div style={S.canvasHint}>🖱️ Drag to rotate</div>
           </div>
           {showPieces && (
