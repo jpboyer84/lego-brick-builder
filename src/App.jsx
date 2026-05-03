@@ -34,9 +34,29 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
   const frameRef = useRef(null);
   const mouseRef = useRef({ isDown: false, lastX: 0, lastY: 0 });
   const rotRef = useRef({ x: -0.5, y: 0.5 });
+  const [ready, setReady] = useState(false);
 
+  // Wait for container to have real dimensions
   useEffect(() => {
     if (!mountRef.current) return;
+    const mount = mountRef.current;
+    if (mount.clientWidth > 0 && mount.clientHeight > 0) {
+      setReady(true);
+      return;
+    }
+    const ro = new ResizeObserver(() => {
+      if (mount.clientWidth > 0 && mount.clientHeight > 0) {
+        setReady(true);
+        ro.disconnect();
+      }
+    });
+    ro.observe(mount);
+    return () => ro.disconnect();
+  }, []);
+
+  // Initialize Three.js once container is ready
+  useEffect(() => {
+    if (!ready || !mountRef.current) return;
     const mount = mountRef.current;
     const w = mount.clientWidth;
     const h = mount.clientHeight;
@@ -58,8 +78,7 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
     mount.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    const ambLight = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambLight);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
     dirLight.position.set(8, 15, 10);
     dirLight.castShadow = true;
@@ -71,6 +90,7 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
     const handleResize = () => {
       const ww = mount.clientWidth;
       const hh = mount.clientHeight;
+      if (ww === 0 || hh === 0) return;
       camera.aspect = ww / hh;
       camera.updateProjectionMatrix();
       renderer.setSize(ww, hh);
@@ -117,7 +137,7 @@ function LegoCanvas({ bricks, highlightStep, rotateAuto }) {
         mount.removeChild(renderer.domElement);
       }
     };
-  }, []);
+  }, [ready]);
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -670,7 +690,7 @@ const S = {
   chooseBrickCount: { fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: 600 },
   chooseCardTitle: { fontFamily: "'Fredoka', sans-serif", fontSize: 18, fontWeight: 600, margin: 0, color: "#F5CD2F" },
   chooseCardDesc: { fontSize: 13, color: "rgba(255,255,255,0.55)", margin: 0, lineHeight: 1.4 },
-  chooseCanvasWrap: { flex: 1, minHeight: 200, borderRadius: 12, overflow: "hidden", background: "rgba(0,0,0,0.2)" },
+  chooseCanvasWrap: { height: 280, borderRadius: 12, overflow: "hidden", background: "rgba(0,0,0,0.2)" },
   chooseStepCount: { fontSize: 12, color: "rgba(255,255,255,0.4)", fontWeight: 600, textAlign: "center" },
   chooseFooter: { flexShrink: 0, borderTop: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.25)", padding: "12px 16px 16px", display: "flex", flexDirection: "column", gap: 10 },
   tweakInput: { flex: 1, padding: "12px 16px", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, color: "#fff", fontSize: 14, fontFamily: "'Nunito', sans-serif", fontWeight: 600, outline: "none" },
