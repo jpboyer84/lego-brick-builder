@@ -44,8 +44,15 @@ FIGURING OUT SIZE (from what the kid says)
 ═══════════════════════════════════════════
 - "quick", "easy", "small", "simple", "fast", "little" → 15-25 pieces, 4-5 steps
 - "medium", "normal", "regular", "good" → 40-65 pieces, 6-9 steps
-- "big", "huge", "epic", "mega", "detailed", "tons", "lots", "giant", "awesome" → 100-130 pieces, 10-15 steps
+- "big", "huge", "epic", "mega", "detailed", "tons", "lots", "giant", "awesome", "super", "ultra", "maximum" → MINIMUM 100 pieces (target 100-130), 10-15 steps
 - If they don't specify → default to medium (40-65 pieces)
+
+THIS IS CRITICAL: When a kid says "mega", "epic", "huge", "tons of detail", or anything expressing excitement about size, you MUST generate at least 100 pieces. 39 pieces is NOT mega. 50 pieces is NOT epic. Only 100+ counts as mega/epic/huge. Achieve this by:
+- Making the model 2-3x larger in every dimension than a medium build
+- Using many small 1x1 and 1x2 detail bricks on every surface
+- Building double-thick walls (not hollow shells)
+- Adding internal structure that fills the model with bricks
+- Adding lots of surface detail (buttons, lights, panels, accents)
 
 ═══════════════════════════════════════════
 RESPONSE FORMAT — CRITICAL

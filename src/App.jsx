@@ -224,7 +224,18 @@ const LegoCanvas = forwardRef(function LegoCanvas({ bricks, highlightStep, rotat
     if (!scene || !renderer || !camera) return;
     while (scene.children.length > 3) { const c = scene.children[3]; c.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); scene.remove(c); }
     const group = new THREE.Group();
+
+    // Compute bounds from ALL bricks (so center stays stable during step-by-step)
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    bricks.forEach(brick => {
+      const px = (brick.x || 0) * STUD, py = (brick.y || 0) * BRICK_H, pz = (brick.z || 0) * STUD;
+      const bw = (brick.width || 1) * STUD, bd = (brick.depth || 1) * STUD, bh = (brick.height || 1) * BRICK_H;
+      minX = Math.min(minX, px); maxX = Math.max(maxX, px + bw);
+      minY = Math.min(minY, py); maxY = Math.max(maxY, py + bh);
+      minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz + bd);
+    });
+
+    // Render only visible bricks
     const vis = highlightStep !== undefined ? bricks.filter(b => b.step <= highlightStep) : bricks;
     vis.forEach(brick => {
       const isH = highlightStep !== undefined && brick.step === highlightStep;
@@ -232,16 +243,25 @@ const LegoCanvas = forwardRef(function LegoCanvas({ bricks, highlightStep, rotat
       const pg = createPieceGroup(brick, isH, isG);
       const px = (brick.x || 0) * STUD, py = (brick.y || 0) * BRICK_H, pz = (brick.z || 0) * STUD;
       pg.position.set(px, py, pz); group.add(pg);
-      const bw = (brick.width || 1) * STUD, bd = (brick.depth || 1) * STUD, bh = (brick.height || 1) * BRICK_H;
-      minX = Math.min(minX, px); maxX = Math.max(maxX, px + bw);
-      minY = Math.min(minY, py); maxY = Math.max(maxY, py + bh);
-      minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz + bd);
     });
-    scene.add(group);
+
+    // Center the model at origin so it spins on its own axis
     const cx = (minX + maxX) / 2 || 0, cy = (minY + maxY) / 2 || 0, cz = (minZ + maxZ) / 2 || 0;
-    const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 4), dist = size * 2.2;
+    group.position.set(-cx, -cy, -cz);
+    scene.add(group);
+
+    const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 4);
+    const dist = size * 1.8;
     cancelAnimationFrame(frameRef.current);
-    const animate = () => { frameRef.current = requestAnimationFrame(animate); if (rotateAuto && !mouseRef.current.isDown) rotRef.current.y += 0.004; camera.position.x = cx + dist * Math.sin(rotRef.current.y) * Math.cos(rotRef.current.x); camera.position.y = cy + dist * Math.sin(-rotRef.current.x) + size * 0.5; camera.position.z = cz + dist * Math.cos(rotRef.current.y) * Math.cos(rotRef.current.x); camera.lookAt(cx, cy, cz); renderer.render(scene, camera); };
+    const animate = () => {
+      frameRef.current = requestAnimationFrame(animate);
+      if (rotateAuto && !mouseRef.current.isDown) rotRef.current.y += 0.004;
+      camera.position.x = dist * Math.sin(rotRef.current.y) * Math.cos(rotRef.current.x);
+      camera.position.y = dist * Math.sin(-rotRef.current.x) + size * 0.3;
+      camera.position.z = dist * Math.cos(rotRef.current.y) * Math.cos(rotRef.current.x);
+      camera.lookAt(0, 0, 0);
+      renderer.render(scene, camera);
+    };
     animate();
   }, [bricks, highlightStep, rotateAuto, ready]);
 
