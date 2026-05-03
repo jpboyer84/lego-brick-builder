@@ -200,8 +200,8 @@ const LegoCanvas = forwardRef(function LegoCanvas({ bricks, highlightStep, rotat
     const mount = mountRef.current;
     const w = mount.clientWidth, h = mount.clientHeight;
     const scene = new THREE.Scene(); scene.background = null; sceneRef.current = scene;
-    const camera = new THREE.PerspectiveCamera(40, w / h, 0.1, 1000);
-    camera.position.set(0, 12, 20); camera.lookAt(0, 3, 0); cameraRef.current = camera;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 1000);
+    camera.position.set(0, 8, 16); camera.lookAt(0, 0, 0); cameraRef.current = camera;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setSize(w, h); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -246,20 +246,28 @@ const LegoCanvas = forwardRef(function LegoCanvas({ bricks, highlightStep, rotat
     });
 
     // Center the model at origin so it spins on its own axis
-    const cx = (minX + maxX) / 2 || 0, cy = (minY + maxY) / 2 || 0, cz = (minZ + maxZ) / 2 || 0;
+    // Shift X and Z to center, but keep Y so model sits on its base
+    const cx = (minX + maxX) / 2 || 0, cy = minY || 0, cz = (minZ + maxZ) / 2 || 0;
     group.position.set(-cx, -cy, -cz);
     scene.add(group);
 
-    const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 4);
-    const dist = size * 2.8;
+    // Compute camera distance to fit model in view
+    const sizeX = maxX - minX || 1, sizeY = maxY - minY || 1, sizeZ = maxZ - minZ || 1;
+    const maxDim = Math.max(sizeX, sizeY, sizeZ);
+    const fovRad = camera.fov * Math.PI / 180;
+    // Distance needed to fit the model's bounding sphere in the camera frustum
+    const fitDist = (maxDim / 2) / Math.tan(fovRad / 2);
+    const dist = fitDist * 1.6; // Add padding so model doesn't fill edge-to-edge
+    const modelCenterY = (maxY - minY) / 2; // vertical center of model in its local space
+
     cancelAnimationFrame(frameRef.current);
     const animate = () => {
       frameRef.current = requestAnimationFrame(animate);
       if (rotateAuto && !mouseRef.current.isDown) rotRef.current.y += 0.004;
       camera.position.x = dist * Math.sin(rotRef.current.y) * Math.cos(rotRef.current.x);
-      camera.position.y = dist * Math.sin(-rotRef.current.x) + size * 0.4;
+      camera.position.y = modelCenterY + dist * Math.sin(-rotRef.current.x) * 0.5 + maxDim * 0.3;
       camera.position.z = dist * Math.cos(rotRef.current.y) * Math.cos(rotRef.current.x);
-      camera.lookAt(0, 0, 0);
+      camera.lookAt(0, modelCenterY, 0);
       renderer.render(scene, camera);
     };
     animate();
