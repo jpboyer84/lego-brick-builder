@@ -221,53 +221,53 @@ const LegoCanvas = forwardRef(function LegoCanvas({ bricks, highlightStep, rotat
 
   useEffect(() => {
     const scene = sceneRef.current, renderer = rendererRef.current, camera = cameraRef.current;
-    if (!scene || !renderer || !camera) return;
-    while (scene.children.length > 3) { const c = scene.children[3]; c.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); scene.remove(c); }
-    const group = new THREE.Group();
+    if (!scene || !renderer || !camera || !bricks || bricks.length === 0) return;
 
-    // Compute bounds from ALL bricks (so center stays stable during step-by-step)
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    bricks.forEach(brick => {
-      const px = (brick.x || 0) * STUD, py = (brick.y || 0) * BRICK_H, pz = (brick.z || 0) * STUD;
-      const bw = (brick.width || 1) * STUD, bd = (brick.depth || 1) * STUD, bh = (brick.height || 1) * BRICK_H;
-      minX = Math.min(minX, px); maxX = Math.max(maxX, px + bw);
-      minY = Math.min(minY, py); maxY = Math.max(maxY, py + bh);
-      minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz + bd);
-    });
+    // Clear old model
+    while (scene.children.length > 3) {
+      const c = scene.children[3];
+      c.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+      scene.remove(c);
+    }
 
-    // Render only visible bricks
+    // Build the full model into a group
+    const fullGroup = new THREE.Group();
     const vis = highlightStep !== undefined ? bricks.filter(b => b.step <= highlightStep) : bricks;
     vis.forEach(brick => {
       const isH = highlightStep !== undefined && brick.step === highlightStep;
       const isG = highlightStep !== undefined && brick.step < highlightStep;
       const pg = createPieceGroup(brick, isH, isG);
       const px = (brick.x || 0) * STUD, py = (brick.y || 0) * BRICK_H, pz = (brick.z || 0) * STUD;
-      pg.position.set(px, py, pz); group.add(pg);
+      pg.position.set(px, py, pz);
+      fullGroup.add(pg);
     });
 
-    // Center the model at origin so it spins on its own axis
-    // Shift X and Z to center, but keep Y so model sits on its base
-    const cx = (minX + maxX) / 2 || 0, cy = minY || 0, cz = (minZ + maxZ) / 2 || 0;
-    group.position.set(-cx, -cy, -cz);
-    scene.add(group);
+    // Use Three.js Box3 to get the TRUE bounding box after all transforms
+    const box = new THREE.Box3().setFromObject(fullGroup);
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    const sphere = new THREE.Sphere();
+    box.getBoundingSphere(sphere);
 
-    // Compute camera distance to fit model in view
-    const sizeX = maxX - minX || 1, sizeY = maxY - minY || 1, sizeZ = maxZ - minZ || 1;
-    const maxDim = Math.max(sizeX, sizeY, sizeZ);
-    const fovRad = camera.fov * Math.PI / 180;
-    // Distance needed to fit the model's bounding sphere in the camera frustum
-    const fitDist = (maxDim / 2) / Math.tan(fovRad / 2);
-    const dist = fitDist * 1.6; // Add padding so model doesn't fill edge-to-edge
-    const modelCenterY = (maxY - minY) / 2; // vertical center of model in its local space
+    // Shift the group so its center is at origin
+    fullGroup.position.sub(center);
+    scene.add(fullGroup);
+
+    // Compute camera distance to fully contain the bounding sphere
+    const fovRad = (camera.fov / 2) * Math.PI / 180;
+    const radius = sphere.radius || 1;
+    const dist = radius / Math.sin(fovRad);  // exact fit
+    const padded = dist * 1.3; // 30% padding so it doesn't fill edge-to-edge
 
     cancelAnimationFrame(frameRef.current);
     const animate = () => {
       frameRef.current = requestAnimationFrame(animate);
       if (rotateAuto && !mouseRef.current.isDown) rotRef.current.y += 0.004;
-      camera.position.x = dist * Math.sin(rotRef.current.y) * Math.cos(rotRef.current.x);
-      camera.position.y = modelCenterY + dist * Math.sin(-rotRef.current.x) * 0.5 + maxDim * 0.3;
-      camera.position.z = dist * Math.cos(rotRef.current.y) * Math.cos(rotRef.current.x);
-      camera.lookAt(0, modelCenterY, 0);
+      const rx = rotRef.current.x, ry = rotRef.current.y;
+      camera.position.x = padded * Math.sin(ry) * Math.cos(rx);
+      camera.position.y = padded * Math.sin(-rx) + radius * 0.15;
+      camera.position.z = padded * Math.cos(ry) * Math.cos(rx);
+      camera.lookAt(0, 0, 0);
       renderer.render(scene, camera);
     };
     animate();
