@@ -86,7 +86,7 @@ RESPONSE FORMAT - respond with ONLY a JSON object (no markdown, no backticks):
 
 Easy: 15-25 bricks, 4-5 steps. Simplified but recognizable. Quick fun build.
 Medium: 40-65 bricks, 6-9 steps. Good proportions, clear features, nice detail.
-Advanced: 100-130 bricks, 10-15 steps. Impressive scale, fine details, accurate proportions, layered construction. This should be a serious build that takes time and looks great. Use lots of small bricks for detail work, build thick walls, add interior features, and make it significantly larger than the medium version.
+Advanced: MINIMUM 100 bricks (aim for 100-130), 10-15 steps. This is CRITICAL — the advanced build MUST have at least 100 bricks. Achieve this by: using many small 1x1 and 1x2 bricks for surface detail, building double-thick walls, adding multiple layers at each height level, including internal structure, and making the model 2-3x larger than medium in every dimension. Every surface should be covered with bricks, not hollow. Think of it like a real 100+ piece LEGO set.
 
 BRICK RULES:
 - Available colors: red, blue, yellow, green, white, black, orange, lime, darkGreen, brown, tan, darkGray, lightGray, pink, purple, cyan, darkBlue, darkRed, sand, lavender
