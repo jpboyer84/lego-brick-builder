@@ -251,13 +251,13 @@ const LegoCanvas = forwardRef(function LegoCanvas({ bricks, highlightStep, rotat
     scene.add(group);
 
     const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 4);
-    const dist = size * 1.8;
+    const dist = size * 2.8;
     cancelAnimationFrame(frameRef.current);
     const animate = () => {
       frameRef.current = requestAnimationFrame(animate);
       if (rotateAuto && !mouseRef.current.isDown) rotRef.current.y += 0.004;
       camera.position.x = dist * Math.sin(rotRef.current.y) * Math.cos(rotRef.current.x);
-      camera.position.y = dist * Math.sin(-rotRef.current.x) + size * 0.3;
+      camera.position.y = dist * Math.sin(-rotRef.current.x) + size * 0.4;
       camera.position.z = dist * Math.cos(rotRef.current.y) * Math.cos(rotRef.current.x);
       camera.lookAt(0, 0, 0);
       renderer.render(scene, camera);
